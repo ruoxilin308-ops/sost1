@@ -1,0 +1,81 @@
+library("quanteda")
+library("tidyverse")
+# Load the corpus
+inaug.corp <- data_corpus_inaugural
+# Add a new variable to the corpus (called a "docvar") that indicates whether a speech was a Trump speech or not
+inaug.corp$Trump <- ifelse(inaug.corp$President=="Trump","Trump","Not.Trump")
+# Remove all speeches before 1945 because we're looking only at post-war presidential inaugurations
+inaug.corp <- corpus_subset(inaug.corp, Year > 1945)
+# Now create a tokens object doing some simple pre-processing
+inaug.toks <- inaug.corp %>%
+  tokens(remove_punct = TRUE,
+         remove_symbols = TRUE,
+         remove_numbers = TRUE) %>%
+  tokens_tolower() %>%
+  tokens_remove(stopwords("english")) %>%
+  tokens_wordstem()
+```
+
+How many features are in this DFM? How many documents? Notice here that to use the `nfeat` function to count features, we need to make the tokens object into a dfm.
+
+```{r}
+# Print the number of documents and features in our corpus after preprocessing
+print(ndoc(dfm(inaug.toks))) # number of documents
+print(nfeat(dfm(inaug.toks))) # number of features
+```
+
+To calculate which words are most discriminating, you need to go word-by-word and calculate a score. Then you can rank or arrange words by this score. Let's start with one word, `america` and calculate its score. Before doing that, we need to create the contingency table, where the row indicates the category (Trump versus Not Trump) and the column counts occurances of either `america` or any word except `america`. We can create this contingency table by "collapsing" the DFM. First, use the `tokens_lookup()` function to group all words that are not `america`. Then use the `dfm_groups()` function to collapse all non-Trump rows together by summing across those rows.
+
+```{r}
+cont.tab <- inaug.toks %>% 
+  tokens_lookup(dictionary(list(america = c("america"))), 
+                nomatch = "not.america") %>% 
+  dfm() %>% 
+  dfm_group(groups = Trump)
+```
+
+It's much easier to work with contingency tables that are in a standard tabular format than in a DFM format, so let's convert it to a matrix:
+
+```{r}
+cont.tab <- cont.tab %>%
+  convert("matrix")
+```
+
+There are two methods for calculating discriminating words scores with a contingency table. First are statistical association measures we introduced in class that do not rely on a language model. Second are so-called "fightin' words" scores that use a language model. Let's look at each in turn.
+
+##### Statistical association measures (using an independence assumption)
+
+Statistical association measures start by creating a hypothetical contingency table that has expected word counts under an **independence assumption** that the particular word being considered (here: `america`) is uncorrelated with the category.
+
+We can calculate the four cells of the hypothetical contingency table as follows:
+
+```{r}
+# Some basic counts used to calculate probabilities
+Nn <- sum(cont.tab[,2]) # number of times tokens other than `america` appear
+Na <- sum(cont.tab[,1]) # number of times `america` appears
+NO <- sum(cont.tab[1,]) # number of tokens spoken by Other Presidents
+NT <- sum(cont.tab[2,]) # number of tokens spoken by Trump
+N <- sum(cont.tab) # total tokens in corpus
+
+# Independence model probabilities for each cell of the hypo contingency table
+p11 <- (NO/N) * (Na/N)
+p12 <- (NO/N) * (Nn/N)
+p21 <- (NT/N) * (Na/N)
+p22 <- (NT/N) * (Nn/N)
+
+# Hypothetical contingency table
+hcont.tab <- rbind(c(p11*N, p12*N),
+                   c(p21*N, p22*N))
+
+# Label things nicely
+row.names(hcont.tab) <- row.names(cont.tab)
+colnames(hcont.tab) <- colnames(cont.tab)
+
+print(hcont.tab)
+```
+
+There is actually a shortcut for producing this hypothetical contingency table once you make the real contingency table. Look at the docs for the `chisq.test()` function to learn more.
+
+```{r}
+# ?chisq.test # <- To learn more
+hcont.tab <- chisq.test(cont.tab)[["expected"]]
